@@ -36,7 +36,7 @@ pip install -e ".[train,perf]"
 
 Test:
 ```bash
-python scripts/profile.py --compile --batch-size 16 --steps 30
+python scripts/benchmark.py --compile --batch-size 16 --steps 30
 ```
 
 ### Windows
@@ -65,7 +65,7 @@ This is the gnarly path. You need:
 
 4. **Test**:
    ```powershell
-   python scripts\profile.py --compile --batch-size 16 --steps 30
+   python scripts\benchmark.py --compile --batch-size 16 --steps 30
    ```
    The first run takes a couple of minutes (kernel compilation). Subsequent runs are cached.
 

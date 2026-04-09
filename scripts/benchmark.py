@@ -1,9 +1,13 @@
-"""Profile Multiscreen training throughput and VRAM.
+"""Benchmark Multiscreen training throughput and VRAM.
 
 Examples:
-    python scripts/profile.py
-    python scripts/profile.py --compile --batch-size 32
-    python scripts/profile.py --psi 12 --batch-size 16 --trace
+    python scripts/benchmark.py
+    python scripts/benchmark.py --compile --batch-size 32
+    python scripts/benchmark.py --psi 12 --batch-size 16 --trace
+
+Note: this file is named ``benchmark.py`` (not ``profile.py``) because ``profile``
+collides with Python's standard library, which breaks ``cProfile`` imports when
+run as a script.
 """
 
 from __future__ import annotations
@@ -16,8 +20,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
-from multiscreen import MultiscreenConfig, MultiscreenModel
-from scripts.train import find_msvc_cl
+from multiscreen import MultiscreenConfig, MultiscreenModel, setup_compile_env
 
 
 def make_dummy_batch(B, T, V, device):
@@ -153,11 +156,9 @@ def main():
     model = MultiscreenModel(config).to(device)
 
     if args.compile:
-        if not os.environ.get("CC"):
-            cl = find_msvc_cl()
-            if cl:
-                os.environ["CC"] = cl
-                print(f"CC: {cl}")
+        cl = setup_compile_env()
+        if cl:
+            print(f"CC: {cl}")
         import logging
         logging.disable(logging.ERROR)
         model = torch.compile(model, mode="default")

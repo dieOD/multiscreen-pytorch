@@ -16,35 +16,15 @@ Custom config:
 from __future__ import annotations
 
 import argparse
-import glob
 import os
 from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
 
-from multiscreen import MultiscreenConfig, MultiscreenModel
+from multiscreen import MultiscreenConfig, MultiscreenModel, setup_compile_env
 from multiscreen.data import PackedTextDataset
 from multiscreen.trainer import Trainer, TrainConfig
-
-
-def find_msvc_cl() -> str | None:
-    """Find MSVC cl.exe for Triton/torch.compile on Windows."""
-    if os.environ.get("CC"):
-        return os.environ["CC"]
-    bases = [
-        Path(r"C:\Program Files (x86)\Microsoft Visual Studio"),
-        Path(r"C:\Program Files\Microsoft Visual Studio"),
-    ]
-    for base in bases:
-        if not base.exists():
-            continue
-        for vs in sorted(base.iterdir(), reverse=True):
-            pattern = str(vs / "BuildTools" / "VC" / "Tools" / "MSVC" / "*" / "bin" / "Hostx64" / "x64" / "cl.exe")
-            matches = sorted(glob.glob(pattern))
-            if matches:
-                return matches[-1]
-    return None
 
 
 def main():
@@ -180,10 +160,9 @@ def main():
     print(f"Actual parameters: {model.count_parameters():,}")
 
     # Setup CC env for compile (auto-detect MSVC on Windows)
-    if args.compile and not os.environ.get("CC"):
-        cl_path = find_msvc_cl()
+    if args.compile:
+        cl_path = setup_compile_env()
         if cl_path:
-            os.environ["CC"] = cl_path
             print(f"CC auto-detected: {cl_path}")
 
     # Trainer

@@ -64,13 +64,13 @@ Benchmark throughput and VRAM:
 
 ```bash
 # Default 154M config, B=16
-python scripts/profile.py
+python scripts/benchmark.py
 
 # With torch.compile (~2.6x faster)
-python scripts/profile.py --compile --batch-size 32
+python scripts/benchmark.py --compile --batch-size 32
 
 # Export Chrome trace for kernel-level inspection
-python scripts/profile.py --trace
+python scripts/benchmark.py --trace
 ```
 
 ## Architecture
@@ -100,7 +100,7 @@ multiscreen-pytorch/
 │   └── trainer.py      # Trainer with AMP, grad accum, checkpointing
 ├── scripts/
 │   ├── train.py        # End-to-end training script
-│   └── profile.py      # Throughput / VRAM benchmark
+│   └── benchmark.py    # Throughput / VRAM benchmark
 ├── tests/
 │   └── test_model.py   # 15 unit tests (CPU-only by default)
 └── docs/
