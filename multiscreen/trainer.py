@@ -151,7 +151,7 @@ class Trainer:
                     attention_mask = attention_mask.to(self.device)
 
                 with torch.amp.autocast("cuda", dtype=self.dtype):
-                    logits = self.model(input_ids)
+                    logits, _ = self.model(input_ids)
                     loss = nn.functional.cross_entropy(
                         logits.view(-1, logits.size(-1)),
                         labels.view(-1),
@@ -223,7 +223,7 @@ class Trainer:
                 attention_mask = attention_mask.to(self.device)
 
             with torch.amp.autocast("cuda", dtype=self.dtype):
-                logits = self.model(input_ids)
+                logits, _ = self.model(input_ids)
                 loss = nn.functional.cross_entropy(
                     logits.view(-1, logits.size(-1)),
                     labels.view(-1),

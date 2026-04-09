@@ -39,7 +39,7 @@ def profile_throughput(model, B, T, V, warmup, steps, device, dtype):
         ids, lab, mask = make_dummy_batch(B, T, V, device)
         opt.zero_grad()
         with torch.amp.autocast("cuda", dtype=dtype):
-            logits = model(ids)
+            logits, _ = model(ids)
             loss = nn.functional.cross_entropy(
                 logits.view(-1, V), lab.view(-1), reduction="none"
             )
@@ -56,7 +56,7 @@ def profile_throughput(model, B, T, V, warmup, steps, device, dtype):
         ids, lab, mask = make_dummy_batch(B, T, V, device)
         opt.zero_grad()
         with torch.amp.autocast("cuda", dtype=dtype):
-            logits = model(ids)
+            logits, _ = model(ids)
             loss = nn.functional.cross_entropy(
                 logits.view(-1, V), lab.view(-1), reduction="none"
             )
@@ -80,7 +80,7 @@ def profile_with_trace(model, B, T, V, device, dtype, steps=5):
         ids, lab, mask = make_dummy_batch(B, T, V, device)
         opt.zero_grad()
         with torch.amp.autocast("cuda", dtype=dtype):
-            logits = model(ids)
+            logits, _ = model(ids)
             loss = nn.functional.cross_entropy(logits.view(-1, V), lab.view(-1))
         loss.backward()
         opt.step()
@@ -98,7 +98,7 @@ def profile_with_trace(model, B, T, V, device, dtype, steps=5):
             ids, lab, mask = make_dummy_batch(B, T, V, device)
             opt.zero_grad()
             with torch.amp.autocast("cuda", dtype=dtype):
-                logits = model(ids)
+                logits, _ = model(ids)
                 loss = nn.functional.cross_entropy(logits.view(-1, V), lab.view(-1))
             loss.backward()
             opt.step()

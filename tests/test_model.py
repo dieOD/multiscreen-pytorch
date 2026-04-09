@@ -56,13 +56,14 @@ class TestForwardBackward:
     def test_forward_shape(self):
         model = MultiscreenModel(SMALL)
         x = torch.randint(0, 100, (2, 32))
-        logits = model(x)
+        logits, _ = model(x)
         assert logits.shape == (2, 32, 100)
 
     def test_backward_all_grads(self):
         model = MultiscreenModel(SMALL)
+        model.train()
         x = torch.randint(0, 100, (2, 32))
-        logits = model(x)
+        logits, _ = model(x)
         logits.sum().backward()
         for name, p in model.named_parameters():
             assert p.grad is not None, f"No gradient for {name}"
@@ -70,8 +71,9 @@ class TestForwardBackward:
     def test_sr_gradient_nonzero(self):
         """sr (acceptance width) must receive a gradient via trim-and-square."""
         model = MultiscreenModel(SMALL)
+        model.train()
         x = torch.randint(0, 100, (2, 32))
-        logits = model(x)
+        logits, _ = model(x)
         logits.sum().backward()
         for name, p in model.named_parameters():
             if "sr" in name:
@@ -88,8 +90,8 @@ class TestGradientCheckpointing:
         x = torch.randint(0, 100, (2, 32))
         model_ref.train()
         model_ckpt.train()
-        out_ref = model_ref(x)
-        out_ckpt = model_ckpt(x)
+        out_ref, _ = model_ref(x)
+        out_ckpt, _ = model_ckpt(x)
         assert torch.allclose(out_ref, out_ckpt, atol=1e-6)
 
     def test_gradient_equivalence(self):
@@ -102,8 +104,10 @@ class TestGradientCheckpointing:
         model_ref.train()
         model_ckpt.train()
 
-        model_ref(x).sum().backward()
-        model_ckpt(x).sum().backward()
+        out_ref, _ = model_ref(x)
+        out_ref.sum().backward()
+        out_ckpt, _ = model_ckpt(x)
+        out_ckpt.sum().backward()
 
         for (n_r, p_r), (n_c, p_c) in zip(
             model_ref.named_parameters(), model_ckpt.named_parameters()
@@ -116,33 +120,16 @@ class TestSoftmask:
     def test_causal_mask(self):
         block = _make_block()
         w = block.sw.exp() + 1
-        mask = block._softmask(8, w, torch.device("cpu"), torch.float32)
+        mask = block._softmask(8, 8, 0, w, torch.device("cpu"), torch.float32)
         for h in range(SMALL.num_heads):
             for i in range(8):
                 for j in range(i + 1, 8):
                     assert mask[0, h, i, j] == 0
 
-    def test_rel_cache_reuse(self):
-        block = _make_block()
-        w = block.sw.exp() + 1
-        _ = block._softmask(8, w, torch.device("cpu"), torch.float32)
-        cached = block._rel_cache
-        _ = block._softmask(8, w, torch.device("cpu"), torch.float32)
-        assert block._rel_cache is cached
-
-    def test_rel_cache_invalidation(self):
-        block = _make_block()
-        w = block.sw.exp() + 1
-        _ = block._softmask(8, w, torch.device("cpu"), torch.float32)
-        old = block._rel_cache
-        _ = block._softmask(16, w, torch.device("cpu"), torch.float32)
-        assert block._rel_cache is not old
-        assert block._rel_cache_T == 16
-
     def test_softmask_in_range(self):
         block = _make_block()
         w = block.sw.exp() + 1
-        mask = block._softmask(32, w, torch.device("cpu"), torch.float32)
+        mask = block._softmask(32, 32, 0, w, torch.device("cpu"), torch.float32)
         assert mask.min() >= 0.0
         assert mask.max() <= 1.0 + 1e-6
 
@@ -166,8 +153,9 @@ class TestScreening:
         q = torch.randn(B, T, SMALL.num_heads, SMALL.key_dim)
         k = torch.randn(B, T, SMALL.num_heads, SMALL.key_dim)
         v = torch.randn(B, T, SMALL.num_heads, SMALL.value_dim)
-        u = block._screening(q, k, v)
+        u, new_kv = block._screening(q, k, v)
         assert u.shape == (B, T, SMALL.num_heads, SMALL.value_dim)
+        assert new_kv is None  # use_cache defaults to False
 
     def test_tanhnorm_bounds(self):
         block = _make_block()
@@ -175,7 +163,7 @@ class TestScreening:
         q = torch.randn(B, T, SMALL.num_heads, SMALL.key_dim)
         k = torch.randn(B, T, SMALL.num_heads, SMALL.key_dim)
         v = torch.randn(B, T, SMALL.num_heads, SMALL.value_dim)
-        u = block._screening(q, k, v)
+        u, _ = block._screening(q, k, v)
         assert u.norm(dim=-1).max() <= 1.0 + 1e-5
 
 
@@ -185,9 +173,10 @@ class TestCUDA:
 
     def test_forward_backward_cuda(self):
         model = MultiscreenModel(SMALL).cuda()
+        model.train()
         x = torch.randint(0, 100, (2, 32), device="cuda")
         with torch.amp.autocast("cuda", dtype=torch.bfloat16):
-            logits = model(x)
+            logits, _ = model(x)
         logits.sum().backward()
         for name, p in model.named_parameters():
             assert p.grad is not None
