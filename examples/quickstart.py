@@ -27,8 +27,8 @@ def main():
     input_ids = torch.randint(0, 1000, (2, 64))
     labels = torch.randint(0, 1000, (2, 64))
 
-    # Forward
-    logits = model(input_ids)
+    # Forward (returns logits and an empty KV cache list in training mode)
+    logits, _ = model(input_ids)
     print(f"Logits shape: {logits.shape}")
 
     # Loss + backward
