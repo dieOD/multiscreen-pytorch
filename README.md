@@ -11,9 +11,10 @@ query-key relevance, stable training at large learning rates, and strong long-co
 
 - **Pure PyTorch reference implementation** of the Multiscreen model
 - **2.6x faster training** than naive PyTorch via `torch.compile` (~41k tok/s on RTX 5070 Ti for a 154M model)
+- **KV cache inference** with up to **5x faster decoding** via `torch.compile` + cache
 - **Generic training script** using HuggingFace `datasets` + `tokenizers`
 - **Gradient checkpointing** for low-VRAM training (-75% VRAM)
-- **CPU-friendly tests** (15 unit tests, no GPU required)
+- **CPU-friendly tests** (20 unit tests, no GPU required)
 
 ## Installation
 
@@ -58,9 +59,38 @@ python scripts/train.py \
     --compile
 ```
 
+## Inference
+
+Greedy generation with the KV cache (see [`examples/generation.py`](examples/generation.py)):
+
+```python
+import torch
+from multiscreen import MultiscreenConfig, MultiscreenModel
+
+model = MultiscreenModel(MultiscreenConfig(...)).eval()
+
+# 1. Prefill the prompt in one forward pass
+prompt_ids = torch.tensor([[1, 2, 3, 4]])
+logits, kv_caches = model(prompt_ids)
+next_logits = logits[:, -1, :]
+
+# 2. Incremental decode
+for step in range(max_new_tokens):
+    next_id = next_logits.argmax(dim=-1, keepdim=True)
+    logits, kv_caches = model(
+        next_id,
+        start_pos=prompt_ids.shape[1] + step,
+        kv_caches=kv_caches,
+    )
+    next_logits = logits[:, -1, :]
+```
+
+See [docs/inference.md](docs/inference.md) for the design (what's cached, how
+the softmask is rebuilt per step, caveats).
+
 ## Profiling
 
-Benchmark throughput and VRAM:
+Training throughput / VRAM:
 
 ```bash
 # Default 154M config, B=16
@@ -71,6 +101,13 @@ python scripts/benchmark.py --compile --batch-size 32
 
 # Export Chrome trace for kernel-level inspection
 python scripts/benchmark.py --trace
+```
+
+Inference throughput:
+
+```bash
+# Compare eager/compile × full-reforward/KV-cache on 200M model
+python scripts/bench_inference.py --prompt 256 --generate 128 --compile
 ```
 
 ## Architecture
@@ -94,34 +131,57 @@ Each Multiscreen layer contains N_H parallel **gated screening tiles**. A tile:
 ```
 multiscreen-pytorch/
 ├── multiscreen/
-│   ├── config.py       # MultiscreenConfig
-│   ├── model.py        # MultiscreenModel + GatedScreeningBlock
-│   ├── data.py         # PackedTextDataset (HF datasets loader)
-│   └── trainer.py      # Trainer with AMP, grad accum, checkpointing
+│   ├── config.py         # MultiscreenConfig
+│   ├── model.py          # MultiscreenModel + GatedScreeningBlock (with KV cache)
+│   ├── data.py           # PackedTextDataset (HF datasets loader)
+│   ├── trainer.py        # Trainer with AMP, grad accum, checkpointing
+│   └── compile_utils.py  # torch.compile / MSVC environment helpers
 ├── scripts/
-│   ├── train.py        # End-to-end training script
-│   └── benchmark.py    # Throughput / VRAM benchmark
+│   ├── train.py              # End-to-end training script
+│   ├── benchmark.py          # Training throughput / VRAM benchmark
+│   └── bench_inference.py    # Inference throughput benchmark
+├── examples/
+│   ├── quickstart.py    # Minimal forward + backward
+│   └── generation.py    # Greedy decode with KV cache
 ├── tests/
-│   └── test_model.py   # 15 unit tests (CPU-only by default)
+│   ├── test_model.py    # 14 unit tests for model / gradients / MiPE
+│   └── test_kv_cache.py #  6 unit tests for incremental decode correctness
 └── docs/
     ├── architecture.md
+    ├── inference.md     # KV cache design and performance
     ├── setup.md
     └── speedup.md
 ```
 
 ## Optimizations applied
 
-The default model implementation includes several optimizations beyond the naive paper transcription:
+The default model implementation includes several optimizations beyond the naive paper transcription.
+
+**Training** (154M model, batch=32, seq_len=256, bf16, RTX 5070 Ti):
 
 | Optimization | What changed | Speedup |
 |--------------|--------------|---------|
-| Softmask cache | Cache `rel` tensor (constant for fixed T), drop `torch.where` | ~3-5% |
 | MiPE in-place rotation | Replace `torch.cat` with index assignment | ~2-3% |
-| Fused trim-square-mask | Reduce T x T intermediates from 3 to 2 via in-place ops | ~10-15% |
+| Fused trim-square-mask | Reduce T×T intermediates from 3 to 2 via in-place ops | ~10-15% |
 | `torch.compile` | inductor backend fuses element-wise ops | **2.4x** |
 | Gradient checkpointing | Trade compute for VRAM (-75% VRAM, enables larger batch) | (compute-bound) |
 
-See [docs/speedup.md](docs/speedup.md) for the full optimization journey, including a CUDA-time profile.
+See [docs/speedup.md](docs/speedup.md) for the full training optimization journey, including a CUDA-time profile.
+
+**Inference** (200M model, bf16, prompt=256, generate=128, RTX 5070 Ti):
+
+| Configuration | per-token (ms) | tok/s | Speedup |
+|---------------|---------------:|------:|--------:|
+| eager + full re-forward    | 16.83 |  59 | 1.0x |
+| eager + KV cache           | 16.85 |  59 | 1.0x |
+| compile + full re-forward  |  4.77 | 210 | 3.5x |
+| **compile + KV cache**     |  **3.41** | **293** | **5.0x** |
+
+KV cache alone is a tie in eager mode (the screening matmul is only ~4% of
+total work) but stacks cleanly on top of `torch.compile`, adding another
+~40% throughput for a total 5x speedup over the eager baseline. See
+[docs/inference.md](docs/inference.md) for the design and when each
+configuration matters.
 
 ## Status
 
