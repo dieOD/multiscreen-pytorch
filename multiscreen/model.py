@@ -152,6 +152,7 @@ class GatedScreeningBlock(nn.Module):
         self.dK = dK
         self.dV = dV
         self.wth = wth
+        self.max_seq_len = config.max_seq_len
 
         # Batched linear projections across all heads (no bias)
         self.q_proj = nn.Linear(dE, NH * dK, bias=False)
@@ -326,11 +327,23 @@ class GatedScreeningBlock(nn.Module):
             torch.zeros_like(w),
         )  # (NH,)
 
-        # Rotation angle: theta(i, w) = (start_pos + i) * phi(w) / w
+        # Rotation angle: theta(i, w) = pi * i_eff * phi(w) / w
         positions = torch.arange(
             start_pos, start_pos + T_new, device=q.device, dtype=q.dtype
         )  # (T_new,)
-        angles = positions.unsqueeze(1) * (phi / w).unsqueeze(0)  # (T_new, NH)
+
+        # Learned window extrapolation: wrap positions beyond training max
+        # length within the per-head window w so rotation angles stay in the
+        # range the model saw during training.
+        pos_2d = positions.unsqueeze(1)   # (T_new, 1)
+        w_2d = w.unsqueeze(0)             # (1, NH)
+        effective_pos = torch.where(
+            pos_2d >= self.max_seq_len,
+            pos_2d % w_2d,
+            pos_2d,
+        )  # (T_new, NH)
+
+        angles = effective_pos * (math.pi * phi / w).unsqueeze(0)  # (T_new, NH)
 
         cos_a = torch.cos(angles)  # (T_new, NH)
         sin_a = torch.sin(angles)  # (T_new, NH)
