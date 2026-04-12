@@ -145,6 +145,72 @@ class TestMiPE:
         assert torch.allclose(q_rot.norm(dim=-1), torch.ones(B, T, NH), atol=1e-5)
         assert torch.allclose(k_rot.norm(dim=-1), torch.ones(B, T, NH), atol=1e-5)
 
+    def test_angle_includes_pi(self):
+        """Rotation angle must be pi * i * phi(w) / w, not i * phi(w) / w."""
+        block = _make_block()
+        B, NH, dK = 1, SMALL.num_heads, SMALL.key_dim
+        # Identity-like vector: [1, 0, 0, ...] so rotation is easy to measure
+        q = torch.zeros(B, 1, NH, dK)
+        q[..., 0] = 1.0
+        k = q.clone()
+        w = block.sw.exp() + 1
+
+        # Rotate at position 1 (start_pos=1)
+        q_rot, _ = block._apply_mipe(q, k, w, start_pos=1)
+
+        # phi(w) for each head
+        wth = block.wth
+        phi = torch.where(
+            w < wth,
+            0.5 * (torch.cos(math.pi * w / wth) + 1.0),
+            torch.zeros_like(w),
+        )
+        expected_angles = math.pi * phi / w  # position=1
+
+        # q_rot[..., 0] = cos(angle), q_rot[..., 1] = sin(angle)
+        actual_cos = q_rot[0, 0, :, 0]
+        expected_cos = torch.cos(expected_angles)
+        assert torch.allclose(actual_cos, expected_cos, atol=1e-6), \
+            f"MiPE angle does not include pi factor: got {actual_cos}, expected {expected_cos}"
+
+    def test_learned_window_extrapolation(self):
+        """Positions beyond max_seq_len must be wrapped within the learned
+        window w, keeping angles in the trained range."""
+        block = _make_block()
+        B, NH, dK = 1, SMALL.num_heads, SMALL.key_dim
+        max_sl = block.max_seq_len  # 32 for SMALL config
+        w = block.sw.exp() + 1
+
+        q = torch.zeros(B, 1, NH, dK)
+        q[..., 0] = 1.0
+        k = q.clone()
+
+        # Position within training range: no wrapping
+        q_in, _ = block._apply_mipe(q, k, w, start_pos=max_sl - 1)
+
+        # Position beyond training range: should wrap (pos % w)
+        far_pos = max_sl + 100
+        q_out, _ = block._apply_mipe(q, k, w, start_pos=far_pos)
+
+        # Compute expected wrapped angle
+        wth = block.wth
+        phi = torch.where(
+            w < wth,
+            0.5 * (torch.cos(math.pi * w / wth) + 1.0),
+            torch.zeros_like(w),
+        )
+        wrapped_pos = far_pos % w  # per-head
+        expected_angles = wrapped_pos * math.pi * phi / w
+        expected_cos = torch.cos(expected_angles)
+
+        actual_cos = q_out[0, 0, :, 0]
+        assert torch.allclose(actual_cos, expected_cos, atol=1e-6), \
+            f"Extrapolation wrapping failed: got {actual_cos}, expected {expected_cos}"
+
+        # Angles for extrapolated positions must stay bounded (< pi)
+        assert (expected_angles.abs() < math.pi + 1e-6).all(), \
+            "Extrapolated angles exceed pi"
+
 
 class TestScreening:
     def test_output_shape(self):
